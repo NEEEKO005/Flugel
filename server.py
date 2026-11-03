@@ -6,10 +6,11 @@ import json
 import os
 import secrets
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "flugel.db"
@@ -36,12 +37,20 @@ DEMO_ACCOUNTS = [
 ]
 
 
+@contextmanager
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
-    return db
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def init_db():
@@ -73,12 +82,15 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"[{self.log_date_time_string()}] {fmt % args}")
 
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        super().end_headers()
+
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -116,6 +128,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/trips":
                 user = self.current_user(db)
                 if not user: return self.send_json({"error":"Inicia sesión para ver tus viajes"},401)
+                if user["role"] != "client": return self.send_json({"error":"Mis viajes est\u00e1 disponible solo para viajeros"},403)
                 rows = db.execute("SELECT * FROM trips WHERE user_id=? ORDER BY id DESC",(user["id"],)).fetchall()
                 return self.send_json([dict(id=r["id"],city=r["city"],country=r["country"],**{"from":r["date_from"],"to":r["date_to"]},duration=r["duration"],travelers=r["travelers"],status=r["status"],image=r["image"],flight=r["flight"]) for r in rows])
             return self.send_json({"error":"Ruta no encontrada"},404)
@@ -151,7 +164,7 @@ class Handler(SimpleHTTPRequestHandler):
                     else:
                         digest=hashlib.pbkdf2_hmac("sha256",password.encode(),bytes.fromhex(user["salt"]),240_000).hex()
                         if not secrets.compare_digest(digest,user["password_hash"]): return self.send_json({"error":"Correo o contraseña incorrectos."},401)
-                        if data.get("role") == "worker" and user["role"] != "worker": return self.send_json({"error":"Esta cuenta no tiene acceso al equipo Flugel."},403)
+                        if data.get("role", "client") != user["role"]: return self.send_json({"error":"No existe una cuenta para el apartado seleccionado."},403)
                 token=secrets.token_urlsafe(32)
                 db.execute("INSERT INTO sessions VALUES(?,?,?)",(token,user["id"],datetime.now(timezone.utc).isoformat()))
                 return self.send_json({"token":token,"user":{"name":user["name"],"email":user["email"],"role":user["role"]}})
@@ -178,7 +191,7 @@ class Handler(SimpleHTTPRequestHandler):
                 row=db.execute("SELECT reports.*, reports.name AS display_name FROM reports WHERE code=?",(code,)).fetchone()
                 return self.send_json(self.report_json(row) if row else {"error":"Reporte no encontrado"},200 if row else 404)
             if path.startswith("/api/countries/"):
-                old_name=path.rsplit("/",1)[-1]
+                old_name=unquote(path.rsplit("/",1)[-1])
                 country=db.execute("SELECT * FROM countries WHERE name=?",(old_name,)).fetchone()
                 if not country: return self.send_json({"error":"País no encontrado"},404)
                 values={key:str(data.get(key,country[key])).strip() for key in ("name","season","visa","vaccine")}

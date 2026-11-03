@@ -10,7 +10,7 @@ Prototipo web de viajes con frontend HTML, CSS y JavaScript, y backend Python co
 
 La base `data/flugel.db` se crea automáticamente. Para borrar los datos locales de prueba, detén el servidor y elimina ese archivo.
 
-La página inicia en el formulario de acceso. Cuentas incluidas:
+La página siempre inicia sin sesión en el formulario de acceso; al recargar, cierra la sesión anterior. **Mis viajes** requiere iniciar sesión. Cuentas incluidas:
 
 - Viajero: `viajero@flugel.com` / `Viaje2026!`
 - Equipo Flugel: `equipo@flugel.com` / `Flugel2026!`
