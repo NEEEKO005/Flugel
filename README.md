@@ -23,3 +23,9 @@ La página siempre inicia sin sesión en el formulario de acceso; al recargar, c
 - Entrar a Equipo Flugel para consultar reportes, cambiar su estado y editar datos de países.
 
 También puedes crear otras cuentas de viajeros desde **Crear cuenta**. Las imágenes requieren internet. La información de visa, vacunas y temporada es ilustrativa; debe verificarse con fuentes oficiales.
+
+## Despliegue en Vercel
+
+El archivo `vercel.json` dirige `/api/*` a una funcion Python que reutiliza las rutas del backend. Las cuentas demo estan disponibles en el despliegue.
+
+La base SQLite del adaptador de Vercel se guarda en `/tmp`, que es temporal. Sirve para probar el login y el MVP; las cuentas nuevas, sesiones, reportes y cambios de paises no son almacenamiento permanente. Para conservar esos datos entre ejecuciones, hay que conectar una base de datos administrada y adaptar `server.py` a ella.
