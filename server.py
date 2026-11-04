@@ -60,8 +60,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reports(id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, user_id INTEGER REFERENCES users(id), name TEXT NOT NULL, email TEXT NOT NULL, destination TEXT NOT NULL, question TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Ya hecha', created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS countries(name TEXT PRIMARY KEY, flag TEXT NOT NULL, region TEXT NOT NULL, season TEXT NOT NULL, visa TEXT NOT NULL, vaccine TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS destination_country_links(destination_id TEXT PRIMARY KEY, country_name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS trips(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER REFERENCES users(id), city TEXT NOT NULL, country TEXT NOT NULL, date_from TEXT NOT NULL, date_to TEXT NOT NULL, duration TEXT NOT NULL, travelers TEXT NOT NULL, status TEXT NOT NULL, image TEXT NOT NULL, flight TEXT NOT NULL);
         """)
+        for destination in DESTINATIONS:
+            db.execute("INSERT OR IGNORE INTO destination_country_links VALUES(?,?)", (destination["id"], destination["country"]))
         for name, email, password, role in DEMO_ACCOUNTS:
             if not db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
                 salt = secrets.token_hex(16)
@@ -114,10 +117,11 @@ class Handler(SimpleHTTPRequestHandler):
             return super().do_GET()
         with connect() as db:
             if path == "/api/destinations":
-                return self.send_json(DESTINATIONS)
+                return self.send_json([self.destination_json(db, item) for item in DESTINATIONS])
             if path.startswith("/api/destinations/"):
                 item = next((d for d in DESTINATIONS if d["id"] == path.rsplit("/",1)[-1]), None)
-                return self.send_json(item or {"error":"Destino no encontrado"}, 200 if item else 404)
+                if not item: return self.send_json({"error":"Destino no encontrado"},404)
+                return self.send_json(self.destination_json(db, item))
             if path == "/api/countries":
                 return self.send_json([dict(r) for r in db.execute("SELECT * FROM countries ORDER BY name")])
             if path == "/api/reports":
@@ -132,6 +136,15 @@ class Handler(SimpleHTTPRequestHandler):
                 rows = db.execute("SELECT * FROM trips WHERE user_id=? ORDER BY id DESC",(user["id"],)).fetchall()
                 return self.send_json([dict(id=r["id"],city=r["city"],country=r["country"],**{"from":r["date_from"],"to":r["date_to"]},duration=r["duration"],travelers=r["travelers"],status=r["status"],image=r["image"],flight=r["flight"]) for r in rows])
             return self.send_json({"error":"Ruta no encontrada"},404)
+
+    @staticmethod
+    def destination_json(db, destination):
+        item = dict(destination)
+        link = db.execute("SELECT country_name FROM destination_country_links WHERE destination_id=?", (item["id"],)).fetchone()
+        country = db.execute("SELECT * FROM countries WHERE name=?", (link["country_name"],)).fetchone() if link else None
+        if country:
+            item.update(country=country["name"], flag=country["flag"], season=country["season"], visa=country["visa"], vaccine=country["vaccine"])
+        return item
 
     @staticmethod
     def report_json(row):
@@ -198,6 +211,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if any(not value for value in values.values()): return self.send_json({"error":"Completa todos los datos."},400)
                 try: db.execute("UPDATE countries SET name=?,season=?,visa=?,vaccine=? WHERE name=?",(values["name"],values["season"],values["visa"],values["vaccine"],old_name))
                 except sqlite3.IntegrityError: return self.send_json({"error":"Ya existe ese país."},409)
+                db.execute("UPDATE destination_country_links SET country_name=? WHERE country_name=?", (values["name"],old_name))
                 return self.send_json(dict(db.execute("SELECT * FROM countries WHERE name=?",(values["name"],)).fetchone()))
             return self.send_json({"error":"Ruta no encontrada"},404)
 

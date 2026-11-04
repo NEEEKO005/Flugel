@@ -188,6 +188,27 @@ class FlugelApiTests(unittest.TestCase):
         _, countries = self.call("GET", "/api/countries")
         persisted = next(country for country in countries if country["name"] == japan["name"])
         self.assertEqual(persisted["visa"], "Consultar consulado")
+        status, destination = self.call("GET", "/api/destinations/kyoto")
+        self.assertEqual(status, 200)
+        self.assertEqual(destination["season"], changed["season"])
+        self.assertEqual(destination["visa"], "Consultar consulado")
+        self.assertEqual(destination["vaccine"], "Revisar recomendaciones")
+
+        status, renamed = self.call("PATCH", "/api/countries/Jap%C3%B3n", {
+            "name": "Nipon", "season": "Temporada nueva", "visa": "Visa nueva",
+            "vaccine": "Vacunas nuevas",
+        }, worker["token"])
+        self.assertEqual(status, 200)
+        self.assertEqual(renamed["name"], "Nipon")
+        _, destinations = self.call("GET", "/api/destinations")
+        kyoto = next(item for item in destinations if item["id"] == "kyoto")
+        self.assertEqual(kyoto["country"], "Nipon")
+        self.assertEqual(kyoto["season"], "Temporada nueva")
+        self.assertEqual(kyoto["visa"], "Visa nueva")
+        self.assertEqual(self.call("PATCH", "/api/countries/Nipon", {
+            "name": japan["name"], "season": persisted["season"],
+            "visa": persisted["visa"], "vaccine": persisted["vaccine"],
+        }, worker["token"])[0], 200)
 
     def test_landing_page_requires_login_and_disables_navigation(self):
         request = Request(self.base + "/")
@@ -205,7 +226,7 @@ class FlugelApiTests(unittest.TestCase):
         self.assertIn('data-view="reports" disabled aria-disabled="true"', html)
         self.assertIn('data-view="countries" disabled aria-disabled="true"', html)
         self.assertIn('<option value="Activos" selected>Solicitudes activas</option>', html)
-        self.assertIn("app.js?v=flugel-auth-fix-20261103d", html)
+        self.assertIn("app.js?v=flugel-destination-sync-20261104", html)
         with urlopen(self.base + "/app.js") as response:
             script = response.read().decode("utf-8")
         self.assertNotIn("Conéctate al servidor Flugel para iniciar sesión", script)

@@ -57,7 +57,7 @@ const apiFetch=async(path,options={})=>{
   return data;
 };
 const originalShowView=showView;
-showView=function(name){if(['home','trips'].includes(name)&&(!apiToken||!currentUser)){toast('Inicia sesión para acceder a esta sección.');name='login'}originalShowView(name);if(name==='reports'&&currentRole==='worker')loadReports();if(name==='countries'&&currentRole==='worker')loadCountries()};
+showView=function(name){if(['home','trips'].includes(name)&&(!apiToken||!currentUser)){toast('Inicia sesión para acceder a esta sección.');name='login'}originalShowView(name);if(name==='home'&&currentRole==='client')loadDestinations();if(name==='reports'&&currentRole==='worker')loadReports();if(name==='countries'&&currentRole==='worker')loadCountries()};
 async function loadDestinations(){try{const data=await apiFetch('/destinations');destinations.splice(0,destinations.length,...data);setFilter(destinationFilter)}catch(error){toast(error.message)}}
 async function loadReports(){try{reports=await apiFetch('/reports');renderReports();updateReportStats()}catch(error){toast(error.message)}}
 async function loadCountries(){try{countries=await apiFetch('/countries');renderCountries()}catch(error){toast(error.message)}}
@@ -100,3 +100,5 @@ $('#forgot').onclick=e=>{e.preventDefault();toast('Contacta al equipo Flugel par
   currentUser=null;setRole('client');updateIdentity();updateNavigationAccess();showView('login');
   await loadDestinations();
 })();
+
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&currentUser?.role==='client')loadDestinations()});
