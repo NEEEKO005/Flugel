@@ -28,4 +28,6 @@ También puedes crear otras cuentas de viajeros desde **Crear cuenta**. Las imá
 
 El archivo `vercel.json` dirige `/api/*` a una funcion Python que reutiliza las rutas del backend. Las cuentas demo estan disponibles en el despliegue.
 
-La base SQLite del adaptador de Vercel se guarda en `/tmp`, que es temporal. Sirve para probar el login y el MVP; las cuentas nuevas, sesiones, reportes y cambios de paises no son almacenamiento permanente. Para conservar esos datos entre ejecuciones, hay que conectar una base de datos administrada y adaptar `server.py` a ella.
+Si no hay una base configurada, la funcion usa SQLite en `/tmp`, que es temporal. Conecta PostgreSQL en Vercel y define `DATABASE_URL` (o `POSTGRES_URL`) para conservar cuentas, sesiones, reportes y cambios de destinos entre ejecuciones.
+
+Para Vercel, puedes instalar una base Neon desde **Storage / Marketplace** y conectarla al proyecto. Vercel agrega las variables de conexion; vuelve a desplegar despues de instalar la dependencia `psycopg` declarada en `requirements.txt`.

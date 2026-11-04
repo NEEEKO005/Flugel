@@ -12,6 +12,13 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+try:
+    from psycopg import IntegrityError as PostgresIntegrityError
+except ImportError:
+    DATABASE_INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
+else:
+    DATABASE_INTEGRITY_ERRORS = (sqlite3.IntegrityError, PostgresIntegrityError)
+
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "flugel.db"
 
@@ -39,10 +46,21 @@ DEMO_ACCOUNTS = [
 
 @contextmanager
 def connect():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA foreign_keys = ON")
+    database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
+    if database_url:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as error:
+            raise RuntimeError("Instala las dependencias de requirements.txt para usar PostgreSQL.") from error
+        db = psycopg.connect(database_url, row_factory=dict_row)
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(DB_PATH)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys = ON")
+    if database_url:
+        db = PostgresConnection(db)
     try:
         yield db
         db.commit()
@@ -53,29 +71,59 @@ def connect():
         db.close()
 
 
+class PostgresConnection:
+    """Small adapter that lets the API share its SQL with local SQLite."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, query, parameters=()):
+        return self.connection.execute(query.replace("?", "%s"), parameters)
+
+    def executemany(self, query, parameters):
+        return self.connection.executemany(query.replace("?", "%s"), parameters)
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+    def close(self):
+        self.connection.close()
+
+
 def init_db():
     with connect() as db:
-        db.executescript("""
+        schema = """
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('client','worker')));
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reports(id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, user_id INTEGER REFERENCES users(id), name TEXT NOT NULL, email TEXT NOT NULL, destination TEXT NOT NULL, question TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Ya hecha', created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS countries(name TEXT PRIMARY KEY, flag TEXT NOT NULL, region TEXT NOT NULL, season TEXT NOT NULL, visa TEXT NOT NULL, vaccine TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS destination_country_links(destination_id TEXT PRIMARY KEY, country_name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS trips(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER REFERENCES users(id), city TEXT NOT NULL, country TEXT NOT NULL, date_from TEXT NOT NULL, date_to TEXT NOT NULL, duration TEXT NOT NULL, travelers TEXT NOT NULL, status TEXT NOT NULL, image TEXT NOT NULL, flight TEXT NOT NULL);
-        """)
+        """
+        if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL"):
+            schema = schema.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+            schema = schema.replace("INTEGER PRIMARY KEY", "BIGINT PRIMARY KEY")
+            schema = schema.replace("user_id INTEGER", "user_id BIGINT")
+            for statement in schema.split(";"):
+                if statement.strip(): db.execute(statement)
+        else:
+            db.executescript(schema)
         for destination in DESTINATIONS:
-            db.execute("INSERT OR IGNORE INTO destination_country_links VALUES(?,?)", (destination["id"], destination["country"]))
+            db.execute("INSERT INTO destination_country_links VALUES(?,?) ON CONFLICT(destination_id) DO NOTHING", (destination["id"], destination["country"]))
         for name, email, password, role in DEMO_ACCOUNTS:
             if not db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
                 salt = secrets.token_hex(16)
                 digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 240_000).hex()
-                db.execute("INSERT INTO users(name,email,salt,password_hash,role) VALUES(?,?,?,?,?)", (name,email,salt,digest,role))
-        if db.execute("SELECT COUNT(*) FROM countries").fetchone()[0] == 0:
-            db.executemany("INSERT INTO countries VALUES(:name,:flag,:region,:season,:visa,:vaccine)", COUNTRIES)
-        if db.execute("SELECT COUNT(*) FROM reports").fetchone()[0] == 0:
+                db.execute("INSERT INTO users(name,email,salt,password_hash,role) VALUES(?,?,?,?,?) ON CONFLICT(email) DO NOTHING", (name,email,salt,digest,role))
+        if db.execute("SELECT COUNT(*) AS total FROM countries").fetchone()["total"] == 0:
+            db.executemany("INSERT INTO countries VALUES(?,?,?,?,?,?) ON CONFLICT(name) DO NOTHING", [tuple(country[key] for key in ("name", "flag", "region", "season", "visa", "vaccine")) for country in COUNTRIES])
+        if db.execute("SELECT COUNT(*) AS total FROM reports").fetchone()["total"] == 0:
             samples = [("Camila Torres","camila.t@email.com","Tokio, Japón","¿Necesito visa para una escala de 8 horas?","Ya hecha"),("Andrés Mejía","andres.m@email.com","Bali, Indonesia","Quiero confirmar vacunas para viajar en enero.","En proceso"),("Lucía Pardo","lucia.p@email.com","París, Francia","¿Puedo cambiar la fecha de mi reserva?","En proceso"),("Mateo Rojas","mateo.r@email.com","Cusco, Perú","¿Qué ropa recomiendan para esta temporada?","Finalizada")]
             for name,email,dest,question,status in samples:
-                db.execute("INSERT INTO reports(code,name,email,destination,question,status,created_at) VALUES(?,?,?,?,?,?,?)", ("FL-"+str(2045+len(db.execute('SELECT id FROM reports').fetchall())),name,email,dest,question,status,datetime.now(timezone.utc).isoformat()))
+                db.execute("INSERT INTO reports(code,name,email,destination,question,status,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING", ("FL-"+str(2045+len(db.execute('SELECT id FROM reports').fetchall())),name,email,dest,question,status,datetime.now(timezone.utc).isoformat()))
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -169,7 +217,7 @@ class Handler(SimpleHTTPRequestHandler):
                     salt = secrets.token_hex(16)
                     digest = hashlib.pbkdf2_hmac("sha256",password.encode(),bytes.fromhex(salt),240_000).hex()
                     try: db.execute("INSERT INTO users(name,email,salt,password_hash,role) VALUES(?,?,?,?,?)",(name,email,salt,digest,"client"))
-                    except sqlite3.IntegrityError: return self.send_json({"error":"Ya existe una cuenta con ese correo."},409)
+                    except DATABASE_INTEGRITY_ERRORS: return self.send_json({"error":"Ya existe una cuenta con ese correo."},409)
                     user = db.execute("SELECT * FROM users WHERE email=?",(email,)).fetchone()
                 else:
                     user = db.execute("SELECT * FROM users WHERE email=?",(email,)).fetchone()
@@ -188,7 +236,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not destination or not question: return self.send_json({"error":"Completa el destino y tu pregunta."},400)
                 code="FL-"+secrets.token_hex(3).upper()
                 cur=db.execute("INSERT INTO reports(code,user_id,name,email,destination,question,status,created_at) VALUES(?,?,?,?,?,?,?,?)",(code,user["id"],user["name"],user["email"],destination,question,"Ya hecha",datetime.now(timezone.utc).isoformat()))
-                row=db.execute("SELECT * FROM reports WHERE id=?",(cur.lastrowid,)).fetchone()
+                row=db.execute("SELECT * FROM reports WHERE code=?",(code,)).fetchone()
                 return self.send_json(self.report_json(row),201)
             return self.send_json({"error":"Ruta no encontrada"},404)
 
@@ -210,7 +258,7 @@ class Handler(SimpleHTTPRequestHandler):
                 values={key:str(data.get(key,country[key])).strip() for key in ("name","season","visa","vaccine")}
                 if any(not value for value in values.values()): return self.send_json({"error":"Completa todos los datos."},400)
                 try: db.execute("UPDATE countries SET name=?,season=?,visa=?,vaccine=? WHERE name=?",(values["name"],values["season"],values["visa"],values["vaccine"],old_name))
-                except sqlite3.IntegrityError: return self.send_json({"error":"Ya existe ese país."},409)
+                except DATABASE_INTEGRITY_ERRORS: return self.send_json({"error":"Ya existe ese país."},409)
                 db.execute("UPDATE destination_country_links SET country_name=? WHERE country_name=?", (values["name"],old_name))
                 return self.send_json(dict(db.execute("SELECT * FROM countries WHERE name=?",(values["name"],)).fetchone()))
             return self.send_json({"error":"Ruta no encontrada"},404)
