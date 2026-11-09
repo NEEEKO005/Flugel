@@ -84,6 +84,35 @@ class FlugelApiTests(unittest.TestCase):
         self.assertIn("reports(id BIGSERIAL PRIMARY KEY", schema)
         self.assertIn("user_id BIGINT", schema)
 
+    def test_postgres_bulk_insert_uses_a_cursor(self):
+        class Cursor:
+            def __init__(self):
+                self.query = None
+                self.parameters = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def executemany(self, query, parameters):
+                self.query = query
+                self.parameters = parameters
+
+        class Connection:
+            def __init__(self):
+                self.last_cursor = Cursor()
+
+            def cursor(self):
+                return self.last_cursor
+
+        connection = Connection()
+        database = flugel.PostgresConnection(connection)
+        database.executemany("INSERT INTO countries VALUES(?)", [("Japón",)])
+        self.assertEqual(connection.last_cursor.query, "INSERT INTO countries VALUES(%s)")
+        self.assertEqual(connection.last_cursor.parameters, [("Japón",)])
+
     def test_auth_validation_and_unknown_routes(self):
         self.assertEqual(self.call("POST", "/api/auth/login", {
             "email": "not-an-email", "password": "ClaveSegura9", "role": "client",
