@@ -75,6 +75,15 @@ class FlugelApiTests(unittest.TestCase):
         self.assertEqual(self.call("DELETE", "/api/auth/session", token=token)[0], 200)
         self.assertEqual(self.call("GET", "/api/trips", token=token)[0], 401)
 
+    def test_postgres_schema_generates_ids_for_new_users(self):
+        schema = flugel.postgres_schema(
+            "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);"
+            "CREATE TABLE reports(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER);"
+        )
+        self.assertIn("users(id BIGSERIAL PRIMARY KEY", schema)
+        self.assertIn("reports(id BIGSERIAL PRIMARY KEY", schema)
+        self.assertIn("user_id BIGINT", schema)
+
     def test_auth_validation_and_unknown_routes(self):
         self.assertEqual(self.call("POST", "/api/auth/login", {
             "email": "not-an-email", "password": "ClaveSegura9", "role": "client",

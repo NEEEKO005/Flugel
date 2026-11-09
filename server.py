@@ -104,9 +104,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS trips(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER REFERENCES users(id), city TEXT NOT NULL, country TEXT NOT NULL, date_from TEXT NOT NULL, date_to TEXT NOT NULL, duration TEXT NOT NULL, travelers TEXT NOT NULL, status TEXT NOT NULL, image TEXT NOT NULL, flight TEXT NOT NULL);
         """
         if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL"):
-            schema = schema.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
-            schema = schema.replace("INTEGER PRIMARY KEY", "BIGINT PRIMARY KEY")
-            schema = schema.replace("user_id INTEGER", "user_id BIGINT")
+            schema = postgres_schema(schema)
             for statement in schema.split(";"):
                 if statement.strip(): db.execute(statement)
         else:
@@ -124,6 +122,12 @@ def init_db():
             samples = [("Camila Torres","camila.t@email.com","Tokio, Japón","¿Necesito visa para una escala de 8 horas?","Ya hecha"),("Andrés Mejía","andres.m@email.com","Bali, Indonesia","Quiero confirmar vacunas para viajar en enero.","En proceso"),("Lucía Pardo","lucia.p@email.com","París, Francia","¿Puedo cambiar la fecha de mi reserva?","En proceso"),("Mateo Rojas","mateo.r@email.com","Cusco, Perú","¿Qué ropa recomiendan para esta temporada?","Finalizada")]
             for name,email,dest,question,status in samples:
                 db.execute("INSERT INTO reports(code,name,email,destination,question,status,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING", ("FL-"+str(2045+len(db.execute('SELECT id FROM reports').fetchall())),name,email,dest,question,status,datetime.now(timezone.utc).isoformat()))
+
+
+def postgres_schema(schema):
+    schema = schema.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+    schema = schema.replace("INTEGER PRIMARY KEY", "BIGSERIAL PRIMARY KEY")
+    return schema.replace("user_id INTEGER", "user_id BIGINT")
 
 
 class Handler(SimpleHTTPRequestHandler):
